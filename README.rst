@@ -154,6 +154,51 @@ Open the Anaconda Prompt and go to the `labelImg <#labelimg>`__ directory
     python labelImg.py
     python labelImg.py [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
 
+Run this fork from source
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+After pushing this project to your GitHub account, replace ``TU_USUARIO/TU_REPOSITORIO`` below with your repository name.
+
+Windows PowerShell
+^^^^^^^^^^^^^^^^^^^
+
+.. code:: powershell
+
+    git clone https://github.com/TU_USUARIO/TU_REPOSITORIO.git labelImg
+    cd labelImg
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
+    python -m pip install --upgrade pip
+    python -m pip install PyQt5 lxml
+    python labelImg.py
+
+Linux and macOS
+^^^^^^^^^^^^^^^
+
+.. code:: shell
+
+    git clone https://github.com/TU_USUARIO/TU_REPOSITORIO.git labelImg
+    cd labelImg
+    python3 -m venv venv
+    source venv/bin/activate
+    python -m pip install --upgrade pip
+    python -m pip install PyQt5 lxml
+    python labelImg.py
+
+Notebook use
+^^^^^^^^^^^^
+
+LabelImg is a desktop Qt application, not an embedded notebook widget. From a notebook running on a computer with a graphical desktop, launch it in a separate window with:
+
+.. code:: python
+
+    import subprocess
+    import sys
+
+    subprocess.Popen([sys.executable, "labelImg.py"])
+
+Hosted notebooks without desktop access cannot display the LabelImg window; run it on your local computer or use a remote desktop session.
+
 Use Docker
 ~~~~~~~~~~~~~~~~~
 .. code:: shell
@@ -187,7 +232,7 @@ Steps (PascalVOC)
 4. Click 'Create RectBox'
 5. Click and release left mouse to select a region to annotate the rect
    box
-6. You can use right mouse to drag the rect box to copy or move it
+6. Right-drag on empty canvas space to select boxes. Right-drag from a box to duplicate the selected boxes immediately.
 
 The annotation will be saved to the folder you specify.
 
@@ -243,7 +288,21 @@ Hotkeys
 +--------------------+--------------------------------------------+
 | Ctrl + s           | Save                                       |
 +--------------------+--------------------------------------------+
+| Ctrl + z           | Undo the last annotation change            |
++--------------------+--------------------------------------------+
+| Ctrl + y           | Redo the last undone change                 |
++--------------------+--------------------------------------------+
+| Ctrl + c           | Copy selected boxes                         |
++--------------------+--------------------------------------------+
+| Ctrl + v           | Paste copied boxes                          |
++--------------------+--------------------------------------------+
+| Ctrl + t           | Duplicate every box in the current image    |
++--------------------+--------------------------------------------+
 | Ctrl + d           | Copy the current label and rect box        |
++--------------------+--------------------------------------------+
+| Ctrl + Shift + v   | Copy boxes from the previous image          |
++--------------------+--------------------------------------------+
+| Ctrl + Shift + y   | Change annotation format                    |
 +--------------------+--------------------------------------------+
 | Ctrl + Shift + d   | Delete the current image                   |
 +--------------------+--------------------------------------------+

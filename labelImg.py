@@ -121,6 +121,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.items_to_shapes = {}
         self.shapes_to_items = {}
         self.prev_label_text = ''
+        self.undo_stack = []
+        self.redo_stack = []
+        self._history_state = None
+        self.shape_clipboard = []
 
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
@@ -140,20 +144,24 @@ class MainWindow(QMainWindow, WindowMixin):
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
         self.diffc_button.stateChanged.connect(self.button_state)
+        self.count_labels_label = QLabel('Count Labels: 0')
         self.edit_button = QToolButton()
         self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
         # Add some of widgets to list_layout
         list_layout.addWidget(self.edit_button)
         list_layout.addWidget(self.diffc_button)
+        list_layout.addWidget(self.count_labels_label)
         list_layout.addWidget(use_default_label_container)
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)
+        self.combo_box.selectionChanged.connect(self.combo_selection_changed)
         list_layout.addWidget(self.combo_box)
 
         # Create and add a widget for showing current label items
         self.label_list = QListWidget()
+        self.label_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         label_list_container = QWidget()
         label_list_container.setLayout(list_layout)
         self.label_list.itemActivated.connect(self.label_selection_changed)
@@ -200,6 +208,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.scrollRequest.connect(self.scroll_request)
 
         self.canvas.newShape.connect(self.new_shape)
+        self.canvas.shapesAdded.connect(self.add_labels)
         self.canvas.shapeMoved.connect(self.set_dirty)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
@@ -228,7 +237,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         open_annotation = action(get_str('openAnnotation'), self.open_annotation_dialog,
                                  'Ctrl+Shift+O', 'open', get_str('openAnnotationDetail'))
-        copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+v', 'copy', get_str('copyPrevBounding'))
+        copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+Shift+V', 'copy', get_str('copyPrevBounding'))
 
         open_next_image = action(get_str('nextImg'), self.open_next_image,
                                  'd', 'next', get_str('nextImgDetail'))
@@ -254,9 +263,32 @@ class MainWindow(QMainWindow, WindowMixin):
                 return '&CreateML', 'format_createml'
 
         save_format = action(get_format_meta(self.label_file_format)[0],
-                             self.change_format, 'Ctrl+Y',
+                             self.change_format, 'Ctrl+Shift+Y',
                              get_format_meta(self.label_file_format)[1],
                              get_str('changeSaveFormat'), enabled=True)
+
+        self.undo_action = QAction('&Undo', self)
+        self.undo_action.setShortcut('Ctrl+Z')
+        self.undo_action.setEnabled(False)
+        self.undo_action.triggered.connect(self.undo)
+        self.redo_action = QAction('&Redo', self)
+        self.redo_action.setShortcut('Ctrl+Y')
+        self.redo_action.setEnabled(False)
+        self.redo_action.triggered.connect(self.redo)
+        self.copy_action = QAction('&Copy Selected', self)
+        self.copy_action.setShortcut('Ctrl+C')
+        self.copy_action.triggered.connect(self.copy_shapes_to_clipboard)
+        self.paste_action = QAction('&Paste Selected', self)
+        self.paste_action.setShortcut('Ctrl+V')
+        self.paste_action.setEnabled(False)
+        self.paste_action.triggered.connect(self.paste_shapes)
+        self.duplicate_all_action = QAction('&Duplicate All Boxes', self)
+        self.duplicate_all_action.setShortcut('Ctrl+T')
+        self.duplicate_all_action.triggered.connect(self.duplicate_all_shapes)
+        for shortcut_action in (self.undo_action, self.redo_action,
+                                self.copy_action, self.paste_action,
+                                self.duplicate_all_action):
+            self.addAction(shortcut_action)
 
         save_as = action(get_str('saveAs'), self.save_file_as,
                          'Ctrl+Shift+S', 'save-as', get_str('saveAsDetail'), enabled=False)
@@ -392,7 +424,10 @@ class MainWindow(QMainWindow, WindowMixin):
                               fileMenuActions=(
                                   open, open_dir, save, save_as, close, reset_all, quit),
                               beginner=(), advanced=(),
-                              editMenu=(edit, copy, delete,
+                              editMenu=(self.undo_action, self.redo_action,
+                                        None, self.copy_action,
+                                        self.paste_action, self.duplicate_all_action,
+                                        None, edit, copy, delete,
                                         None, color1, self.draw_squares_option),
                               beginnerContext=(create, edit, copy, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy,
@@ -533,6 +568,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Display cursor coordinates at the right of status bar
         self.label_coordinates = QLabel('')
+        self.go_to_image_label = QLabel('Go to image:')
+        self.go_to_image_spin = QSpinBox()
+        self.go_to_image_spin.setRange(1, max(1, self.img_count))
+        self.go_to_image_spin.setFixedWidth(72)
+        self.go_to_image_spin.editingFinished.connect(self.go_to_image)
+        self.statusBar().addPermanentWidget(self.go_to_image_label)
+        self.statusBar().addPermanentWidget(self.go_to_image_spin)
         self.statusBar().addPermanentWidget(self.label_coordinates)
 
         # Open Dir if default file
@@ -617,8 +659,85 @@ class MainWindow(QMainWindow, WindowMixin):
         add_actions(self.tools, self.actions.advanced)
 
     def set_dirty(self):
+        current_state = self._capture_history_state()
+        if self._history_state is None:
+            self._history_state = current_state
+        elif self._history_signature(current_state) != self._history_signature(self._history_state):
+            self.undo_stack.append(self._history_state)
+            if len(self.undo_stack) > 50:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+            self._history_state = current_state
         self.dirty = True
         self.actions.save.setEnabled(True)
+        self.update_history_actions()
+
+    def _capture_history_state(self):
+        state = []
+        for shape in self.canvas.shapes:
+            copied_shape = shape.copy()
+            copied_shape.selected = False
+            item = self.shapes_to_items.get(shape)
+            visible = item is None or item.checkState() == Qt.Checked
+            state.append((copied_shape, visible))
+        return state
+
+    def _history_signature(self, state):
+        return tuple((shape.label,
+                      tuple((point.x(), point.y()) for point in shape.points),
+                      shape.difficult,
+                      shape.line_color.getRgb(),
+                      shape.fill_color.getRgb(),
+                      shape.paint_label,
+                      visible)
+                     for shape, visible in state)
+
+    def reset_history(self):
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self._history_state = self._capture_history_state()
+        self.update_history_actions()
+
+    def update_history_actions(self):
+        if hasattr(self, 'undo_action'):
+            self.undo_action.setEnabled(bool(self.undo_stack))
+            self.redo_action.setEnabled(bool(self.redo_stack))
+
+    def restore_history_state(self, state):
+        self.canvas.de_select_shape()
+        self.canvas.visible.clear()
+        restored_shapes = [shape.copy() for shape, _ in state]
+        self.canvas.load_shapes(restored_shapes)
+        self.items_to_shapes.clear()
+        self.shapes_to_items.clear()
+        self.label_list.clear()
+        for shape, (_, visible) in zip(restored_shapes, state):
+            self.add_label(shape)
+            item = self.shapes_to_items[shape]
+            item.setCheckState(Qt.Checked if visible else Qt.Unchecked)
+        self.canvas.select_shapes([])
+        for action in self.actions.onShapesPresent:
+            action.setEnabled(bool(restored_shapes))
+
+    def undo(self, _value=False):
+        if not self.undo_stack:
+            return
+        self.redo_stack.append(self._capture_history_state())
+        self.restore_history_state(self.undo_stack.pop())
+        self._history_state = self._capture_history_state()
+        self.dirty = True
+        self.actions.save.setEnabled(True)
+        self.update_history_actions()
+
+    def redo(self, _value=False):
+        if not self.redo_stack:
+            return
+        self.undo_stack.append(self._capture_history_state())
+        self.restore_history_state(self.redo_stack.pop())
+        self._history_state = self._capture_history_state()
+        self.dirty = True
+        self.actions.save.setEnabled(True)
+        self.update_history_actions()
 
     def set_clean(self):
         self.dirty = False
@@ -649,7 +768,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_file = None
         self.canvas.reset_state()
         self.label_coordinates.clear()
-        self.combo_box.cb.clear()
+        self.combo_box.update_items([])
+        self.count_labels_label.setText('Count Labels: 0')
+        self.reset_history()
 
     def current_item(self):
         items = self.label_list.selectedItems()
@@ -798,14 +919,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # React to canvas signals.
     def shape_selection_changed(self, selected=False):
-        if self._no_selection_slot:
-            self._no_selection_slot = False
-        else:
-            shape = self.canvas.selected_shape
-            if shape:
-                self.shapes_to_items[shape].setSelected(True)
-            else:
-                self.label_list.clearSelection()
+        blocked = self.label_list.blockSignals(True)
+        self.label_list.clearSelection()
+        for shape in self.canvas.selected_shapes:
+            item = self.shapes_to_items.get(shape)
+            if item:
+                item.setSelected(True)
+        self.label_list.blockSignals(blocked)
         self.actions.delete.setEnabled(selected)
         self.actions.copy.setEnabled(selected)
         self.actions.edit.setEnabled(selected)
@@ -824,6 +944,10 @@ class MainWindow(QMainWindow, WindowMixin):
         for action in self.actions.onShapesPresent:
             action.setEnabled(True)
         self.update_combo_box()
+
+    def add_labels(self, shapes):
+        for shape in shapes:
+            self.add_label(shape)
 
     def remove_label(self, shape):
         if shape is None:
@@ -866,15 +990,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.load_shapes(s)
 
     def update_combo_box(self):
-        # Get the unique labels and add them to the Combobox.
         items_text_list = [str(self.label_list.item(i).text()) for i in range(self.label_list.count())]
-
-        unique_text_list = list(set(items_text_list))
-        # Add a null row for showing all the labels
-        unique_text_list.append("")
-        unique_text_list.sort()
-
-        self.combo_box.update_items(unique_text_list)
+        self.combo_box.update_items(sorted(set(items_text_list)))
+        self.combo_selection_changed(self.combo_box.selected_labels())
 
     def save_labels(self, annotation_file_path):
         annotation_file_path = ustr(annotation_file_path)
@@ -918,31 +1036,70 @@ class MainWindow(QMainWindow, WindowMixin):
             return False
 
     def copy_selected_shape(self):
-        self.add_label(self.canvas.copy_selected_shape())
-        # fix copy and delete
-        self.shape_selection_changed(True)
+        shapes = self.canvas.copy_selected_shape() or []
+        self.add_labels(shapes)
+        self.shape_selection_changed(bool(shapes))
+        if shapes:
+            self.set_dirty()
 
-    def combo_selection_changed(self, index):
-        text = self.combo_box.cb.itemText(index)
+    def copy_shapes_to_clipboard(self, _value=False):
+        if not self.canvas.selected_shapes:
+            return
+        self.shape_clipboard = [shape.copy()
+                                for shape in self.canvas.selected_shapes]
+        self.paste_action.setEnabled(True)
+
+    def paste_shapes(self, _value=False):
+        if not self.shape_clipboard:
+            return
+        shapes = [shape.copy() for shape in self.shape_clipboard]
+        delta = self.canvas.clamp_shapes_delta(shapes, QPointF(2.0, 2.0))
+        for shape in shapes:
+            shape.move_by(delta)
+            self.canvas.shapes.append(shape)
+        self.canvas.select_shapes(shapes)
+        self.add_labels(shapes)
+        self.shape_selection_changed(True)
+        self.set_dirty()
+
+    def duplicate_all_shapes(self, _value=False):
+        if not self.canvas.shapes:
+            return
+        shapes = [shape.copy() for shape in self.canvas.shapes]
+        delta = self.canvas.clamp_shapes_delta(shapes, QPointF(2.0, 2.0))
+        for shape in shapes:
+            shape.move_by(delta)
+            self.canvas.shapes.append(shape)
+        self.canvas.select_shapes(shapes)
+        self.add_labels(shapes)
+        self.shape_selection_changed(True)
+        self.set_dirty()
+
+    def combo_selection_changed(self, selected_labels):
+        selected_labels = set(selected_labels)
+        visible_count = 0
         for i in range(self.label_list.count()):
-            if text == "":
-                self.label_list.item(i).setCheckState(2)
-            elif text != self.label_list.item(i).text():
-                self.label_list.item(i).setCheckState(0)
-            else:
-                self.label_list.item(i).setCheckState(2)
+            item = self.label_list.item(i)
+            shape = self.items_to_shapes[item]
+            matches_filter = not selected_labels or shape.label in selected_labels
+            item.setHidden(not matches_filter)
+            self.canvas.set_shape_visible(
+                shape, matches_filter and item.checkState() == Qt.Checked)
+            if matches_filter and item.checkState() == Qt.Checked:
+                visible_count += 1
+        self.count_labels_label.setText('Count Labels: %d' % visible_count)
 
     def default_label_combo_selection_changed(self, index):
         self.default_label=self.label_hist[index]
 
     def label_selection_changed(self):
-        item = self.current_item()
-        if item and self.canvas.editing():
-            self._no_selection_slot = True
-            self.canvas.select_shape(self.items_to_shapes[item])
-            shape = self.items_to_shapes[item]
-            # Add Chris
-            self.diffc_button.setChecked(shape.difficult)
+        if not self.canvas.editing():
+            return
+        shapes = [self.items_to_shapes[item]
+                  for item in self.label_list.selectedItems()]
+        self.canvas.select_shapes(shapes)
+        if len(shapes) == 1:
+            self.diffc_button.setChecked(shapes[0].difficult)
 
     def label_item_changed(self, item):
         shape = self.items_to_shapes[item]
@@ -950,9 +1107,15 @@ class MainWindow(QMainWindow, WindowMixin):
         if label != shape.label:
             shape.label = item.text()
             shape.line_color = generate_color_by_text(shape.label)
+            self.update_combo_box()
             self.set_dirty()
         else:  # User probably changed item visibility
-            self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)
+            selected_labels = self.combo_box.selected_labels()
+            visible = item.checkState() == Qt.Checked
+            if selected_labels and shape.label not in selected_labels:
+                visible = False
+            self.canvas.set_shape_visible(shape, visible)
+            self.combo_selection_changed(selected_labels)
 
     # Callback functions:
     def new_shape(self):
@@ -1027,13 +1190,14 @@ class MainWindow(QMainWindow, WindowMixin):
         # up and down analogous
         cursor = QCursor()
         pos = cursor.pos()
-        relative_pos = QWidget.mapFromGlobal(self, pos)
+        viewport = self.scroll_area.viewport()
+        relative_pos = viewport.mapFromGlobal(pos)
 
         cursor_x = relative_pos.x()
         cursor_y = relative_pos.y()
 
-        w = self.scroll_area.width()
-        h = self.scroll_area.height()
+        w = viewport.width()
+        h = viewport.height()
 
         # the scaling from 0 to 1 has some padding
         # you don't have to hit the very leftmost pixel for a maximum-left movement
@@ -1151,6 +1315,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.load_pixmap(QPixmap.fromImage(image))
             if self.label_file:
                 self.load_labels(self.label_file.shapes)
+            self.reset_history()
             self.set_clean()
             self.canvas.setEnabled(True)
             self.adjust_scale(initial=True)
@@ -1161,6 +1326,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
             counter = self.counter_str()
             self.setWindowTitle(__appname__ + ' ' + file_path + ' ' + counter)
+            self.update_image_navigator()
 
             # Default : select last item if there is at least one item
             if self.label_list.count():
@@ -1176,6 +1342,26 @@ class MainWindow(QMainWindow, WindowMixin):
         Converts image counter to string representation.
         """
         return '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
+
+    def update_image_navigator(self):
+        self.go_to_image_spin.setRange(1, max(1, self.img_count))
+        self.go_to_image_spin.setEnabled(self.img_count > 0)
+        self.go_to_image_spin.setValue(min(self.cur_img_idx + 1,
+                                           max(1, self.img_count)))
+
+    def go_to_image(self):
+        target_index = self.go_to_image_spin.value() - 1
+        if target_index == self.cur_img_idx:
+            return
+        if not self.m_img_list or target_index >= len(self.m_img_list):
+            self.status('Open an image directory to jump between images.')
+            self.update_image_navigator()
+            return
+        if not self.may_continue():
+            self.update_image_navigator()
+            return
+        self.cur_img_idx = target_index
+        self.load_file(self.m_img_list[target_index])
 
     def show_bounding_box_from_annotation_file(self, file_path):
         if self.default_save_dir is not None:
@@ -1371,6 +1557,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
+        self.update_image_navigator()
         self.open_next_image()
         for imgPath in self.m_img_list:
             item = QListWidgetItem(imgPath)
@@ -1572,8 +1759,11 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_dirty()
 
     def delete_selected_shape(self):
-        self.remove_label(self.canvas.delete_selected())
-        self.set_dirty()
+        shapes = self.canvas.delete_selected() or []
+        for shape in shapes:
+            self.remove_label(shape)
+        if shapes:
+            self.set_dirty()
         if self.no_shapes():
             for action in self.actions.onShapesPresent:
                 action.setEnabled(False)
