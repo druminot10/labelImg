@@ -8,6 +8,11 @@ from libs.constants import DEFAULT_ENCODING
 TXT_EXT = '.txt'
 ENCODE_METHOD = DEFAULT_ENCODING
 
+
+class YoloFormatError(ValueError):
+    pass
+
+
 class YOLOWriter:
 
     def __init__(self, folder_name, filename, img_size, database_src='Unknown', local_img_path=None):
@@ -94,8 +99,8 @@ class YoloReader:
 
         # print (file_path, self.class_list_path)
 
-        classes_file = open(self.class_list_path, 'r')
-        self.classes = classes_file.read().strip('\n').split('\n')
+        with open(self.class_list_path, 'r', encoding=ENCODE_METHOD) as classes_file:
+            self.classes = classes_file.read().splitlines()
 
         # print (self.classes)
 
@@ -105,6 +110,7 @@ class YoloReader:
         self.img_size = img_size
 
         self.verified = False
+        self.skipped_annotations = 0
         # try:
         self.parse_yolo_format()
         # except:
@@ -134,10 +140,23 @@ class YoloReader:
         return label, x_min, y_min, x_max, y_max
 
     def parse_yolo_format(self):
-        bnd_box_file = open(self.file_path, 'r')
-        for bndBox in bnd_box_file:
-            class_index, x_center, y_center, w, h = bndBox.strip().split(' ')
-            label, x_min, y_min, x_max, y_max = self.yolo_line_to_shape(class_index, x_center, y_center, w, h)
+        with open(self.file_path, 'r', encoding=ENCODE_METHOD) as bnd_box_file:
+            for line_number, bnd_box in enumerate(bnd_box_file, start=1):
+                class_index, x_center, y_center, w, h = bnd_box.split()
+                try:
+                    class_index_value = int(class_index)
+                except ValueError as error:
+                    raise YoloFormatError(
+                        'Invalid class ID %r at line %d in %s.'
+                        % (class_index, line_number, self.file_path)
+                    ) from error
 
-            # Caveat: difficult flag is discarded when saved as yolo format.
-            self.add_shape(label, x_min, y_min, x_max, y_max, False)
+                if class_index_value < 0 or class_index_value >= len(self.classes):
+                    self.skipped_annotations += 1
+                    continue
+
+                label, x_min, y_min, x_max, y_max = self.yolo_line_to_shape(
+                    class_index_value, x_center, y_center, w, h)
+
+                # Caveat: difficult flag is discarded when saved as yolo format.
+                self.add_shape(label, x_min, y_min, x_max, y_max, False)

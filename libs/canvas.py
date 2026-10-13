@@ -43,12 +43,12 @@ class Canvas(QWidget):
         self.current = None
         self.selected_shape = None  # save the selected shape here
         self.selected_shapes = []
-        self.selected_shape_copies = []
         self.selected_shape_copy = None
         self.selection_rect = None
         self.right_drag_mode = None
         self.right_press_pos = QPointF()
         self.right_last_pos = QPointF()
+        self.drag_selected_shapes = False
         self.shape_drag_changed = False
         self.drawing_line_color = QColor(0, 0, 255)
         self.drawing_rect_color = QColor(0, 0, 255)
@@ -176,18 +176,15 @@ class Canvas(QWidget):
             if self.right_drag_mode == 'select':
                 self.selection_rect = QRectF(self.right_press_pos, pos).normalized()
             else:
-                if (not self.selected_shape_copies and
-                        distance(pos - self.right_press_pos) > 2):
-                    self.selected_shape_copies = [
-                        shape.copy() for shape in self.selected_shapes]
-                    for shape in self.selected_shape_copies:
-                        shape.selected = True
-                if self.selected_shape_copies:
-                    delta = pos - self.right_last_pos
-                    delta = self.clamp_shapes_delta(self.selected_shape_copies, delta)
-                    for shape in self.selected_shape_copies:
-                        shape.move_by(delta)
-                    self.right_last_pos = pos
+                self.move_selected_shapes(pos - self.right_last_pos)
+                self.right_last_pos = pos
+            self.repaint()
+            return
+
+        if self.drag_selected_shapes and Qt.LeftButton & ev.buttons():
+            delta = self.move_selected_shapes(pos - self.prev_point)
+            if delta:
+                self.prev_point = pos
             self.repaint()
             return
 
@@ -279,26 +276,49 @@ class Canvas(QWidget):
             if self.drawing():
                 self.handle_drawing(pos)
             else:
-                selection = self.select_shape_point(pos)
-                self.prev_point = pos
+                selected_bounds = None
+                for shape in self.selected_shapes:
+                    shape_bounds = shape.bounding_rect()
+                    selected_bounds = (
+                        shape_bounds if selected_bounds is None else
+                        selected_bounds.united(shape_bounds))
+                if (len(self.selected_shapes) > 1 and
+                        not self.selected_vertex() and
+                        selected_bounds is not None and
+                        selected_bounds.contains(pos)):
+                    self.drag_selected_shapes = True
+                    self.prev_point = pos
+                else:
+                    selection = self.select_shape_point(pos)
+                    self.prev_point = pos
 
-                if selection is None:
-                    # pan
-                    QApplication.setOverrideCursor(QCursor(Qt.OpenHandCursor))
-                    self.pan_initial_pos = ev.pos()
+                    if selection is None:
+                        # pan
+                        QApplication.setOverrideCursor(QCursor(Qt.OpenHandCursor))
+                        self.pan_initial_pos = ev.pos()
 
         elif ev.button() == Qt.RightButton and self.editing():
             self.right_press_pos = pos
             self.right_last_pos = pos
+            self.shape_drag_changed = False
             self.selection_rect = None
             hit_shape = self.shape_at_point(pos)
             if hit_shape is None:
-                self.right_drag_mode = 'select'
-                self.selection_rect = QRectF(pos, pos)
+                selected_bounds = None
+                for shape in self.selected_shapes:
+                    shape_bounds = shape.bounding_rect()
+                    selected_bounds = (
+                        shape_bounds if selected_bounds is None else
+                        selected_bounds.united(shape_bounds))
+                if selected_bounds is not None and selected_bounds.contains(pos):
+                    self.right_drag_mode = 'move'
+                else:
+                    self.right_drag_mode = 'select'
+                    self.selection_rect = QRectF(pos, pos)
             else:
                 if hit_shape not in self.selected_shapes:
                     self.select_shapes([hit_shape])
-                self.right_drag_mode = 'duplicate'
+                self.right_drag_mode = 'move'
         self.update()
 
     def mouseReleaseEvent(self, ev):
@@ -308,13 +328,10 @@ class Canvas(QWidget):
                             if self.isVisible(shape) and
                             self.selection_rect.intersects(shape.bounding_rect())]
                 self.select_shapes(selected)
-            elif self.selected_shape_copies:
-                self.shapes.extend(self.selected_shape_copies)
-                self.select_shapes(self.selected_shape_copies)
-                self.shapesAdded.emit(list(self.selected_shape_copies))
+            elif self.right_drag_mode == 'move' and self.shape_drag_changed:
                 self.shapeMoved.emit()
+                self.shape_drag_changed = False
             self.right_drag_mode = None
-            self.selected_shape_copies = []
             self.selection_rect = None
             self.update()
         elif ev.button() == Qt.LeftButton and self.selected_shape:
@@ -325,13 +342,29 @@ class Canvas(QWidget):
             if self.shape_drag_changed:
                 self.shapeMoved.emit()
                 self.shape_drag_changed = False
+            self.drag_selected_shapes = False
         elif ev.button() == Qt.LeftButton:
+            if self.drag_selected_shapes:
+                if self.shape_drag_changed:
+                    self.shapeMoved.emit()
+                    self.shape_drag_changed = False
+                self.drag_selected_shapes = False
+                self.update()
+                return
             pos = self.transform_pos(ev.pos())
             if self.drawing():
                 self.handle_drawing(pos)
             else:
                 # pan
                 QApplication.restoreOverrideCursor()
+
+    def move_selected_shapes(self, delta):
+        delta = self.clamp_shapes_delta(self.selected_shapes, delta)
+        if delta:
+            for shape in self.selected_shapes:
+                shape.move_by(delta)
+            self.shape_drag_changed = True
+        return delta
 
     def end_move(self, copy=False):
         assert self.selected_shape and self.selected_shape_copy
@@ -591,12 +624,12 @@ class Canvas(QWidget):
         if self.current:
             self.current.paint(p)
             self.line.paint(p)
-        for shape in self.selected_shape_copies:
-            shape.paint(p)
         if self.selection_rect:
-            p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(40, 110, 220), 1.0 / self.scale, Qt.DashLine))
+            selection_color = QColor(40, 110, 220)
+            p.setPen(QPen(selection_color, 1.0 / self.scale, Qt.DashLine))
+            p.setBrush(QBrush(Qt.BDiagPattern))
             p.drawRect(self.selection_rect)
+            p.setBrush(Qt.NoBrush)
 
         # Paint rect
         if self.current is not None and len(self.line) == 2:
@@ -811,9 +844,9 @@ class Canvas(QWidget):
         self.de_select_shape()
         self.un_highlight()
         self.selected_shape_copy = None
-        self.selected_shape_copies = []
         self.selection_rect = None
         self.right_drag_mode = None
+        self.drag_selected_shapes = False
 
         self.restore_cursor()
         self.pixmap = None

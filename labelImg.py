@@ -41,7 +41,7 @@ from libs.labelFile import LabelFile, LabelFileError, LabelFileFormat
 from libs.toolBar import ToolBar
 from libs.pascal_voc_io import PascalVocReader
 from libs.pascal_voc_io import XML_EXT
-from libs.yolo_io import YoloReader
+from libs.yolo_io import YoloReader, YoloFormatError
 from libs.yolo_io import TXT_EXT
 from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
@@ -172,6 +172,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.default_label_combo_box = DefaultLabelComboBox(self, items=self.label_hist)
         self.default_label_combo_box.set_text(self.default_label)
         self.default_label_combo_box.cb.lineEdit().textEdited.connect(self.default_label_text_changed)
+        self.default_label_combo_box.cb.view().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.default_label_combo_box.cb.view().customContextMenuRequested.connect(
+            self.pop_default_label_menu)
 
         use_default_label_qhbox_layout = QHBoxLayout()
         use_default_label_qhbox_layout.addWidget(self.use_default_label_checkbox)
@@ -195,19 +198,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.diffc_button.setChecked(False)
         self.diffc_button.stateChanged.connect(self.button_state)
         self.count_labels_label = QLabel('Count Labels: 0')
-        self.font_size_label = QLabel('Font size:')
-        self.font_size_spin = QSpinBox()
-        self.font_size_spin.setRange(10, 22)
-        self.font_size_spin.setValue(12)
-        self.font_size_spin.valueChanged.connect(self.update_font_size)
         self.edit_button = QToolButton()
         self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-
-        font_size_layout = QHBoxLayout()
-        font_size_layout.addWidget(self.font_size_label)
-        font_size_layout.addWidget(self.font_size_spin)
-        font_size_container = QWidget()
-        font_size_container.setLayout(font_size_layout)
 
         # Add some of widgets to list_layout
         list_layout.addWidget(go_to_image_container)
@@ -215,7 +207,6 @@ class MainWindow(QMainWindow, WindowMixin):
         list_layout.addWidget(use_default_label_container)
         list_layout.addWidget(self.count_labels_label)
         list_layout.addWidget(self.diffc_button)
-        list_layout.addWidget(font_size_container)
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)
@@ -759,25 +750,25 @@ class MainWindow(QMainWindow, WindowMixin):
             self.undo_action.setEnabled(bool(self.undo_stack))
             self.redo_action.setEnabled(bool(self.redo_stack))
 
-    def update_font_size(self, value):
-        font = self.font()
-        font.setPointSize(value)
-        widgets = [
-            self.use_default_label_checkbox,
-            self.default_label_combo_box,
-            self.diffc_button,
-            self.count_labels_label,
-            self.font_size_label,
-            self.font_size_spin,
-            self.label_list,
-            self.combo_box,
-            self.go_to_image_label,
-            self.go_to_image_spin,
-        ]
-        for widget in widgets:
-            if hasattr(widget, 'setFont'):
-                widget.setFont(font)
-        self.label_list.update()
+    def ensure_label_in_history(self, label_text):
+        label = (label_text or '').strip()
+        if not label:
+            return label
+
+        if label not in self.label_hist:
+            self.label_hist.append(label)
+
+            if hasattr(self, 'default_label_combo_box'):
+                combo = self.default_label_combo_box.cb
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItems(self.label_hist)
+                combo.setCurrentText(label)
+                combo.blockSignals(False)
+
+            self.default_label = label
+
+        return label
 
     def restore_history_state(self, state):
         self.canvas.de_select_shape()
@@ -788,6 +779,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.shapes_to_items.clear()
         self.label_list.clear()
         for shape, (_, visible) in zip(restored_shapes, state):
+            self.ensure_label_in_history(shape.label)
             self.add_label(shape)
             item = self.shapes_to_items[shape]
             item.setCheckState(Qt.Checked if visible else Qt.Unchecked)
@@ -944,7 +936,66 @@ class MainWindow(QMainWindow, WindowMixin):
             menu.addAction(action)
 
     def pop_label_list_menu(self, point):
-        self.menus.labelList.exec_(self.label_list.mapToGlobal(point))
+        item = self.label_list.itemAt(point)
+        if item is None:
+            return
+
+        shape = self.items_to_shapes.get(item)
+        if shape is None:
+            return
+
+        menu = QMenu(self)
+        delete_box_action = menu.addAction('Delete box')
+        delete_label_action = menu.addAction(
+            'Delete label and its boxes from this image')
+        selected_action = menu.exec_(self.label_list.mapToGlobal(point))
+        if selected_action == delete_box_action:
+            self.canvas.select_shape(shape)
+            self.delete_selected_shape()
+        elif selected_action == delete_label_action:
+            self.delete_label_class(shape.label)
+
+    def pop_default_label_menu(self, point):
+        combo = self.default_label_combo_box.cb
+        index = combo.view().indexAt(point)
+        if not index.isValid():
+            return
+
+        label = str(combo.itemText(index.row()))
+        menu = QMenu(self)
+        delete_action = menu.addAction(
+            'Delete label and its boxes from this image')
+        if menu.exec_(combo.view().viewport().mapToGlobal(point)) == delete_action:
+            self.delete_label_class(label)
+
+    def delete_label_class(self, label):
+        answer = QMessageBox.question(
+            self,
+            'Delete label',
+            'Delete "%s" from the label list and remove all boxes with this '
+            'label from the current image? This cannot be undone after saving.'
+            % label,
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel)
+        if answer != QMessageBox.Yes:
+            return
+
+        shapes = [shape for shape in self.canvas.shapes if shape.label == label]
+        if shapes:
+            self.canvas.select_shapes(shapes)
+            self.delete_selected_shape()
+
+        if label in self.label_hist:
+            self.label_hist.remove(label)
+
+        combo = self.default_label_combo_box.cb
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(self.label_hist)
+        self.default_label = self.label_hist[0] if self.label_hist else ''
+        combo.setCurrentText(self.default_label)
+        combo.blockSignals(False)
+        self.set_dirty()
 
     def edit_label(self):
         if not self.canvas.editing():
@@ -954,6 +1005,7 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         text = self.label_dialog.pop_up(item.text())
         if text is not None:
+            text = self.ensure_label_in_history(text)
             item.setText(text)
             item.setBackground(generate_color_by_text(text))
             self.set_dirty()
@@ -1176,6 +1228,7 @@ class MainWindow(QMainWindow, WindowMixin):
         value = (text or '').strip()
         if value:
             self.default_label = value
+            self.ensure_label_in_history(value)
 
     def label_selection_changed(self):
         if not self.canvas.editing():
@@ -1188,9 +1241,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def label_item_changed(self, item):
         shape = self.items_to_shapes[item]
-        label = item.text()
+        label = self.ensure_label_in_history(item.text())
         if label != shape.label:
-            shape.label = item.text()
+            shape.label = label
             shape.line_color = generate_color_by_text(shape.label)
             self.update_combo_box()
             self.set_dirty()
@@ -1226,6 +1279,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.diffc_button.setChecked(False)
         if text is not None:
             self.prev_label_text = text
+            text = self.ensure_label_in_history(text)
             generate_color = generate_color_by_text(text)
             shape = self.canvas.set_last_label(text, generate_color, generate_color)
             self.add_label(shape)
@@ -1235,9 +1289,6 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 self.actions.editMode.setEnabled(True)
             self.set_dirty()
-
-            if text not in self.label_hist:
-                self.label_hist.append(text)
         else:
             # self.canvas.undoLastLine()
             self.canvas.reset_all_lines()
@@ -1408,6 +1459,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.add_recent_file(self.file_path)
             self.toggle_actions(True)
             self.show_bounding_box_from_annotation_file(self.file_path)
+            self.reset_history()
 
             counter = self.counter_str()
             self.setWindowTitle(__appname__ + ' ' + file_path + ' ' + counter)
@@ -1910,12 +1962,22 @@ class MainWindow(QMainWindow, WindowMixin):
         if os.path.isfile(txt_path) is False:
             return
 
+        try:
+            t_yolo_parse_reader = YoloReader(txt_path, self.image)
+        except YoloFormatError as error:
+            self.error_message('Invalid YOLO annotation', ustr(error))
+            return
+
         self.set_format(FORMAT_YOLO)
-        t_yolo_parse_reader = YoloReader(txt_path, self.image)
         shapes = t_yolo_parse_reader.get_shapes()
-        print(shapes)
         self.load_labels(shapes)
         self.canvas.verified = t_yolo_parse_reader.verified
+        if t_yolo_parse_reader.skipped_annotations:
+            self.status(
+                '%d YOLO annotation(s) skipped because their class ID is missing from %s.'
+                % (t_yolo_parse_reader.skipped_annotations,
+                   os.path.basename(t_yolo_parse_reader.class_list_path))
+            )
 
     def load_create_ml_json_by_filename(self, json_path, file_path):
         if self.file_path is None:

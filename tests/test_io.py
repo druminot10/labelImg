@@ -1,6 +1,38 @@
 import os
 import sys
+import tempfile
 import unittest
+
+
+class TestYoloReader(unittest.TestCase):
+
+    def test_class_index_without_matching_class_is_skipped(self):
+        from libs.yolo_io import YoloReader
+
+        class Image:
+            def height(self):
+                return 512
+
+            def width(self):
+                return 512
+
+            def isGrayscale(self):
+                return False
+
+        with tempfile.TemporaryDirectory() as directory:
+            annotation_path = os.path.join(directory, 'image.txt')
+            classes_path = os.path.join(directory, 'classes.txt')
+            with open(annotation_path, 'w') as annotation_file:
+                annotation_file.write('1 0.5 0.5 0.2 0.2\n')
+                annotation_file.write('2 0.5 0.5 0.2 0.2\n')
+            with open(classes_path, 'w') as classes_file:
+                classes_file.write('product\ntray\n')
+
+            reader = YoloReader(annotation_path, Image())
+            self.assertEqual(1, len(reader.get_shapes()))
+            self.assertEqual('tray', reader.get_shapes()[0][0])
+            self.assertEqual(1, reader.skipped_annotations)
+
 
 class TestPascalVocRW(unittest.TestCase):
 
