@@ -25,7 +25,7 @@ Python 3.10 or 3.11, Git, and a local desktop environment (not for servers or Ju
 git clone https://github.com/druminot10/labelImg.git
 cd labelImg-master
 py -3.11 -m venv venv
-.\venv\Scripts\Activate.ps1
+.\venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip install PyQt5 lxml
 python -m PyQt5.pyrcc_main -o libs/resources.py resources.qrc
@@ -51,7 +51,7 @@ python labelImg.py
 
 Just activate the environment and run:
 
-- Windows: `.\venv\Scripts\Activate.ps1` then `python labelImg.py`
+- Windows: `.\venv\Scripts\activate.bat` then `python labelImg.py`
 - Ubuntu / Linux / macOS: `source venv/bin/activate` then `python labelImg.py`
 
 ## Original project
