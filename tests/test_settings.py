@@ -11,6 +11,11 @@ libs_path = os.path.join(dir_name, '..', 'libs')
 sys.path.insert(0, libs_path)
 from settings import Settings
 
+try:
+    from labelImg import ensure_default_class_names
+except ImportError:
+    ensure_default_class_names = None
+
 class TestSettings(unittest.TestCase):
 
     def test_basic(self):
@@ -26,7 +31,13 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(settings.get('test1'), 10)
 
         settings.reset()
-        
+
+    def test_default_class_names_are_ordered(self):
+        self.assertIsNotNone(ensure_default_class_names)
+        self.assertEqual(
+            ensure_default_class_names(['dog', 'cat']),
+            ['product', 'tray', 'box', 'dog', 'cat']
+        )
 
 
 if __name__ == '__main__':

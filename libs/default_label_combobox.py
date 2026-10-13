@@ -17,11 +17,27 @@ class DefaultLabelComboBox(QWidget):
         super(DefaultLabelComboBox, self).__init__(parent)
 
         layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         self.cb = QComboBox()
-        self.items = items
+        self.cb.setEditable(True)
+        self.cb.setInsertPolicy(QComboBox.NoInsert)
+        self.items = list(items)
         self.cb.addItems(self.items)
+        self.cb.lineEdit().setPlaceholderText('product')
 
-        self.cb.currentIndexChanged.connect(parent.default_label_combo_selection_changed)
+        if self.items:
+            self.cb.setCurrentIndex(0)
+            if hasattr(parent, 'default_label_combo_selection_changed'):
+                self.cb.currentIndexChanged.connect(parent.default_label_combo_selection_changed)
 
         layout.addWidget(self.cb)
         self.setLayout(layout)
+
+    def current_text(self):
+        return self.cb.currentText().strip()
+
+    def set_text(self, text):
+        text = text or ''
+        self.cb.setCurrentText(text)
+        if not text and self.items:
+            self.cb.setCurrentIndex(0)

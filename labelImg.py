@@ -49,6 +49,40 @@ from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
 
 __appname__ = 'labelImg'
+DEFAULT_CLASS_NAMES = ['product', 'tray', 'box']
+
+
+def normalize_class_name(label):
+    label = (label or '').strip()
+    if not label:
+        return ''
+    if ' ' in label:
+        head, rest = label.split(' ', 1)
+        if head.isdigit():
+            return rest.strip()
+    return label
+
+
+def ensure_default_class_names(labels):
+    ordered = []
+    seen = set()
+    for label in labels or []:
+        normalized = normalize_class_name(label)
+        if not normalized or normalized in seen:
+            continue
+        ordered.append(normalized)
+        seen.add(normalized)
+
+    for default_label in DEFAULT_CLASS_NAMES:
+        if default_label not in seen:
+            ordered.insert(len(ordered), default_label)
+            seen.add(default_label)
+
+    for default_label in DEFAULT_CLASS_NAMES:
+        if default_label in ordered:
+            ordered.remove(default_label)
+    ordered = DEFAULT_CLASS_NAMES + [label for label in ordered if label not in DEFAULT_CLASS_NAMES]
+    return ordered
 
 
 class WindowMixin(object):
@@ -109,10 +143,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Load predefined classes to the list
         self.load_predefined_classes(default_prefdef_class_file)
+        self.label_hist = ensure_default_class_names(self.label_hist)
 
         if self.label_hist:
             self.default_label = self.label_hist[0]
         else:
+            self.label_hist = DEFAULT_CLASS_NAMES[:]
+            self.default_label = self.label_hist[0]
             print("Not find:/data/predefined_classes.txt (optional)")
 
         # Main widgets and related state.
@@ -132,7 +169,9 @@ class MainWindow(QMainWindow, WindowMixin):
         # Create a widget for using default label
         self.use_default_label_checkbox = QCheckBox(get_str('useDefaultLabel'))
         self.use_default_label_checkbox.setChecked(False)
-        self.default_label_combo_box = DefaultLabelComboBox(self,items=self.label_hist)
+        self.default_label_combo_box = DefaultLabelComboBox(self, items=self.label_hist)
+        self.default_label_combo_box.set_text(self.default_label)
+        self.default_label_combo_box.cb.lineEdit().textEdited.connect(self.default_label_text_changed)
 
         use_default_label_qhbox_layout = QHBoxLayout()
         use_default_label_qhbox_layout.addWidget(self.use_default_label_checkbox)
@@ -140,19 +179,43 @@ class MainWindow(QMainWindow, WindowMixin):
         use_default_label_container = QWidget()
         use_default_label_container.setLayout(use_default_label_qhbox_layout)
 
+        self.go_to_image_label = QLabel('Go to image:')
+        self.go_to_image_spin = QSpinBox()
+        self.go_to_image_spin.setRange(1, max(1, self.img_count))
+        self.go_to_image_spin.setFixedWidth(72)
+        self.go_to_image_spin.editingFinished.connect(self.go_to_image)
+        go_to_image_layout = QHBoxLayout()
+        go_to_image_layout.addWidget(self.go_to_image_label)
+        go_to_image_layout.addWidget(self.go_to_image_spin)
+        go_to_image_container = QWidget()
+        go_to_image_container.setLayout(go_to_image_layout)
+
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
         self.diffc_button.stateChanged.connect(self.button_state)
         self.count_labels_label = QLabel('Count Labels: 0')
+        self.font_size_label = QLabel('Font size:')
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(10, 22)
+        self.font_size_spin.setValue(12)
+        self.font_size_spin.valueChanged.connect(self.update_font_size)
         self.edit_button = QToolButton()
         self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
+        font_size_layout = QHBoxLayout()
+        font_size_layout.addWidget(self.font_size_label)
+        font_size_layout.addWidget(self.font_size_spin)
+        font_size_container = QWidget()
+        font_size_container.setLayout(font_size_layout)
+
         # Add some of widgets to list_layout
+        list_layout.addWidget(go_to_image_container)
         list_layout.addWidget(self.edit_button)
-        list_layout.addWidget(self.diffc_button)
-        list_layout.addWidget(self.count_labels_label)
         list_layout.addWidget(use_default_label_container)
+        list_layout.addWidget(self.count_labels_label)
+        list_layout.addWidget(self.diffc_button)
+        list_layout.addWidget(font_size_container)
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)
@@ -568,13 +631,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Display cursor coordinates at the right of status bar
         self.label_coordinates = QLabel('')
-        self.go_to_image_label = QLabel('Go to image:')
-        self.go_to_image_spin = QSpinBox()
-        self.go_to_image_spin.setRange(1, max(1, self.img_count))
-        self.go_to_image_spin.setFixedWidth(72)
-        self.go_to_image_spin.editingFinished.connect(self.go_to_image)
-        self.statusBar().addPermanentWidget(self.go_to_image_label)
-        self.statusBar().addPermanentWidget(self.go_to_image_spin)
         self.statusBar().addPermanentWidget(self.label_coordinates)
 
         # Open Dir if default file
@@ -702,6 +758,26 @@ class MainWindow(QMainWindow, WindowMixin):
         if hasattr(self, 'undo_action'):
             self.undo_action.setEnabled(bool(self.undo_stack))
             self.redo_action.setEnabled(bool(self.redo_stack))
+
+    def update_font_size(self, value):
+        font = self.font()
+        font.setPointSize(value)
+        widgets = [
+            self.use_default_label_checkbox,
+            self.default_label_combo_box,
+            self.diffc_button,
+            self.count_labels_label,
+            self.font_size_label,
+            self.font_size_spin,
+            self.label_list,
+            self.combo_box,
+            self.go_to_image_label,
+            self.go_to_image_spin,
+        ]
+        for widget in widgets:
+            if hasattr(widget, 'setFont'):
+                widget.setFont(font)
+        self.label_list.update()
 
     def restore_history_state(self, state):
         self.canvas.de_select_shape()
@@ -1090,7 +1166,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self.count_labels_label.setText('Count Labels: %d' % visible_count)
 
     def default_label_combo_selection_changed(self, index):
-        self.default_label=self.label_hist[index]
+        if index < 0:
+            return
+        text = self.default_label_combo_box.current_text()
+        if text:
+            self.default_label = text
+
+    def default_label_text_changed(self, text):
+        value = (text or '').strip()
+        if value:
+            self.default_label = value
 
     def label_selection_changed(self):
         if not self.canvas.editing():
@@ -1135,7 +1220,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 text = self.label_dialog.pop_up(text=self.prev_label_text)
                 self.lastLabel = text
         else:
-            text = self.default_label
+            text = self.default_label_combo_box.current_text() or self.default_label
 
         # Add Chris
         self.diffc_button.setChecked(False)

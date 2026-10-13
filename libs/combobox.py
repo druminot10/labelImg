@@ -21,50 +21,41 @@ class ComboBox(QWidget):
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         self.cb = QComboBox()
-        self.model = QStandardItemModel(self.cb)
-        self.cb.setModel(self.model)
-        self.cb.setEditable(True)
-        self.cb.lineEdit().setReadOnly(True)
-        self.cb.activated.connect(self.toggle_item)
+        self.cb.setEditable(False)
+        self.cb.currentIndexChanged.connect(self._on_selection_changed)
         self.items = []
         self.update_items(items or [])
 
         layout.addWidget(self.cb)
         self.setLayout(layout)
 
+    def _on_selection_changed(self, _index):
+        self.selectionChanged.emit(self.selected_labels())
+
     def update_items(self, items):
-        selected = self.selected_labels()
         self.items = list(items)
-        self.model.clear()
+        self.cb.blockSignals(True)
+        self.cb.clear()
+        self.cb.addItem('All labels')
         for text in self.items:
-            item = QStandardItem(text)
-            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable |
-                          Qt.ItemIsUserCheckable)
-            item.setData(Qt.Checked if text in selected else Qt.Unchecked,
-                         Qt.CheckStateRole)
-            self.model.appendRow(item)
+            self.cb.addItem(text)
+        self.cb.blockSignals(False)
         self.update_summary()
 
     def selected_labels(self):
-        return {self.model.item(index).text()
-                for index in range(self.model.rowCount())
-                if self.model.item(index).checkState() == Qt.Checked}
+        current_text = self.cb.currentText()
+        if current_text == 'All labels' or not current_text:
+            return set()
+        return {current_text}
 
     def toggle_item(self, index):
-        item = self.model.item(index)
-        if item is None:
-            return
-        state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
-        item.setCheckState(state)
-        selected = self.selected_labels()
-        self.update_summary()
-        self.selectionChanged.emit(selected)
-        QTimer.singleShot(0, self.cb.showPopup)
+        if index >= 0:
+            self.cb.setCurrentIndex(index)
 
     def update_summary(self):
-        selected = self.selected_labels()
-        if not selected:
-            summary = 'All labels'
+        current_text = self.cb.currentText()
+        if not current_text or current_text == 'All labels':
+            self.cb.setCurrentIndex(0)
+            self.cb.setToolTip('All labels')
         else:
-            summary = '%d labels selected' % len(selected)
-        self.cb.lineEdit().setText(summary)
+            self.cb.setToolTip(current_text)
