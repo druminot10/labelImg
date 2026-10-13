@@ -1,103 +1,60 @@
-LabelImg Custom
+# LabelImg Custom
 
-A customized version of LabelImg with additional productivity improvements for image annotation workflows.
+A customized version of LabelImg with productivity improvements for image annotation. Exports labels in YOLO TXT format.
 
-Features
-- Undo and redo support with Ctrl + Z / Ctrl + Y
+## What's new
+
+- Undo and redo with Ctrl + Z / Ctrl + Y
 - Right-click selection for boxes
+- Select and move boxes with right-click
+- Copy and paste boxes to another image
+- Ctrl + T copies all the boxes of the current image
+- Delete a label by right-clicking on it
 - Label counter in the right panel
 - Quick navigation to a specific image
-- Improved zoom and selection behavior
-- Preserves YOLO TXT output generation
 
-Requirements
-- Python 3.10 or 3.11
-- Git
-- Desktop environment (Windows, Linux, or macOS)
-- Local machine with GUI support
+## Requirements
 
-Important: LabelImg is a desktop app. It is not intended to run in a remote environment, Jupyter Notebook, or a server without a graphical interface.
+Python 3.10 or 3.11, Git, and a local desktop environment (not for servers or Jupyter).
 
-Clone the repository
+## Install and run
 
+### Windows (PowerShell)
+
+```powershell
 git clone https://github.com/druminot10/labelImg.git
-cd labelImg
-
-Install dependencies
-
-Windows (PowerShell)
-
+cd labelImg-master
 py -3.11 -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install PyQt5 lxml
+python -m PyQt5.pyrcc_main -o libs/resources.py resources.qrc
+python labelImg.py
+```
 
-Linux / macOS
+If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` and activate again.
 
+### Ubuntu / Linux / macOS
+
+```bash
+git clone https://github.com/druminot10/labelImg.git
+cd labelImg-master
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
 pip install PyQt5 lxml
-
-Run the application
-
-Windows
-
+python -m PyQt5.pyrcc_main -o libs/resources.py resources.qrc
 python labelImg.py
+```
 
-Linux / macOS
+### Next times
 
-python labelImg.py
+Just activate the environment and run:
 
-Quick start
-1. Open the folder containing your images.
-2. Select the label class.
-3. Draw the bounding box on the image.
-4. Save the annotation.
-5. The label file will be exported as a .txt file in YOLO format.
+- Windows: `.\venv\Scripts\Activate.ps1` then `python labelImg.py`
+- Ubuntu / Linux / macOS: `source venv/bin/activate` then `python labelImg.py`
 
-Common issues
+## Original project
 
-The app closes immediately
-- Make sure you are using Python 3.10 or 3.11.
-- Verify that PyQt5 and lxml are installed.
-- Run it from a normal local terminal with a desktop environment.
-
-PowerShell blocks activation on Windows
-
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-
-Then activate the venv again:
-
-.\venv\Scripts\Activate.ps1
-
-Qt-related errors
-
-pip install --upgrade PyQt5
-
-Fast install summary
-
-git clone https://github.com/druminot10/labelImg.git
-cd labelImg
-
-# Windows
-py -3.11 -m venv venv
-.\venv\Scripts\Activate.ps1
-
-# Linux / macOS
-# python3 -m venv venv
-# source venv/bin/activate
-
-python -m pip install --upgrade pip
-pip install PyQt5 lxml
-python labelImg.py
-
-Notes
-This project is based on the original LabelImg repository, but includes custom improvements for annotation speed and workflow efficiency.
-
-Original project
 - Original repo: https://github.com/HumanSignal/labelImg
 - This fork: https://github.com/druminot10/labelImg
-
-Testing
-The full validation of the custom features will be carried out in the next testing session.
