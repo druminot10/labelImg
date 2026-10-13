@@ -23,7 +23,7 @@ Python 3.10 or 3.11, Git, and a local desktop environment (not for servers or Ju
 
 ```powershell
 git clone https://github.com/druminot10/labelImg.git
-cd labelImg-master
+cd labelImg
 py -3.11 -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -38,7 +38,7 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process -Execut
 
 ```bash
 git clone https://github.com/druminot10/labelImg.git
-cd labelImg-master
+cd labelImg
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
