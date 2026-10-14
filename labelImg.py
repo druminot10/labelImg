@@ -347,6 +347,15 @@ class MainWindow(QMainWindow, WindowMixin):
                                 self.select_all_action, self.replace_all_action):
             self.addAction(shortcut_action)
 
+        # Number keys 1-9 (and 0) pick label 0-9 of the default label list.
+        # Text fields accept the key first, so typing digits still works.
+        for index, key in enumerate('1234567890'):
+            quick_action = QAction('Quick label %d' % index, self)
+            quick_action.setShortcut(key)
+            quick_action.triggered.connect(
+                lambda _checked=False, i=index: self.select_quick_label(i))
+            self.addAction(quick_action)
+
         save_as = action(get_str('saveAs'), self.save_file_as,
                          'Ctrl+Shift+S', 'save-as', get_str('saveAsDetail'), enabled=False)
 
@@ -1258,6 +1267,14 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_list.setUpdatesEnabled(True)
         self.canvas.repaint()
         self.count_labels_label.setText('Count Labels: %d' % visible_count)
+
+    def select_quick_label(self, index):
+        combo = self.default_label_combo_box.cb
+        if index >= combo.count():
+            return
+        combo.setCurrentIndex(index)
+        self.default_label = combo.itemText(index)
+        self.status('Label: %s' % self.default_label)
 
     def default_label_combo_selection_changed(self, index):
         if index < 0:
