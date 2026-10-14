@@ -326,7 +326,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.undo_action.setEnabled(False)
         self.undo_action.triggered.connect(self.undo)
         self.redo_action = QAction('&Redo', self)
-        self.redo_action.setShortcut('Ctrl+Y')
+        self.redo_action.setShortcut('Ctrl+Shift+Z')
         self.redo_action.setEnabled(False)
         self.redo_action.triggered.connect(self.redo)
         self.copy_action = QAction('&Copy Selected', self)
@@ -336,12 +336,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self.paste_action.setShortcut('Ctrl+V')
         self.paste_action.setEnabled(False)
         self.paste_action.triggered.connect(self.paste_shapes)
-        self.duplicate_all_action = QAction('&Duplicate All Boxes', self)
-        self.duplicate_all_action.setShortcut('Ctrl+T')
-        self.duplicate_all_action.triggered.connect(self.duplicate_all_shapes)
+        self.replace_all_action = QAction('Replace All with &Copied', self)
+        self.replace_all_action.setShortcut('Ctrl+Y')
+        self.replace_all_action.triggered.connect(self.replace_all_with_clipboard)
+        self.select_all_action = QAction('Select &All Boxes', self)
+        self.select_all_action.setShortcut('Ctrl+T')
+        self.select_all_action.triggered.connect(self.select_all_shapes)
         for shortcut_action in (self.undo_action, self.redo_action,
                                 self.copy_action, self.paste_action,
-                                self.duplicate_all_action):
+                                self.select_all_action, self.replace_all_action):
             self.addAction(shortcut_action)
 
         save_as = action(get_str('saveAs'), self.save_file_as,
@@ -480,7 +483,8 @@ class MainWindow(QMainWindow, WindowMixin):
                               beginner=(), advanced=(),
                               editMenu=(self.undo_action, self.redo_action,
                                         None, self.copy_action,
-                                        self.paste_action, self.duplicate_all_action,
+                                        self.paste_action, self.select_all_action,
+                                        self.replace_all_action,
                                         None, edit, copy, delete,
                                         None, color1, self.draw_squares_option),
                               beginnerContext=(create, edit, copy, delete),
@@ -778,11 +782,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self.items_to_shapes.clear()
         self.shapes_to_items.clear()
         self.label_list.clear()
+        for label in {shape.label for shape in restored_shapes}:
+            self.ensure_label_in_history(label)
+        self.add_labels(restored_shapes)
+        # Apply saved visibility with signals blocked, then refresh once.
+        blocked = self.label_list.blockSignals(True)
         for shape, (_, visible) in zip(restored_shapes, state):
-            self.ensure_label_in_history(shape.label)
-            self.add_label(shape)
-            item = self.shapes_to_items[shape]
-            item.setCheckState(Qt.Checked if visible else Qt.Unchecked)
+            if not visible:
+                self.shapes_to_items[shape].setCheckState(Qt.Unchecked)
+        self.label_list.blockSignals(blocked)
+        self.combo_selection_changed(self.combo_box.selected_labels())
         self.canvas.select_shapes([])
         for action in self.actions.onShapesPresent:
             action.setEnabled(bool(restored_shapes))
@@ -1060,7 +1069,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.shapeLineColor.setEnabled(selected)
         self.actions.shapeFillColor.setEnabled(selected)
 
-    def add_label(self, shape):
+    def add_label(self, shape, refresh=True):
         shape.paint_label = self.display_label_option.isChecked()
         item = HashableQListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -1069,13 +1078,26 @@ class MainWindow(QMainWindow, WindowMixin):
         self.items_to_shapes[item] = shape
         self.shapes_to_items[shape] = item
         self.label_list.addItem(item)
+        if refresh:
+            for action in self.actions.onShapesPresent:
+                action.setEnabled(True)
+            self.update_combo_box()
+
+    def add_labels(self, shapes):
+        """Add many labels, refreshing the combo box and list only once."""
+        if not shapes:
+            return
+        blocked = self.label_list.blockSignals(True)
+        self.label_list.setUpdatesEnabled(False)
+        try:
+            for shape in shapes:
+                self.add_label(shape, refresh=False)
+        finally:
+            self.label_list.setUpdatesEnabled(True)
+            self.label_list.blockSignals(blocked)
         for action in self.actions.onShapesPresent:
             action.setEnabled(True)
         self.update_combo_box()
-
-    def add_labels(self, shapes):
-        for shape in shapes:
-            self.add_label(shape)
 
     def remove_label(self, shape):
         if shape is None:
@@ -1113,9 +1135,8 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 shape.fill_color = generate_color_by_text(label)
 
-            self.add_label(shape)
-        self.update_combo_box()
         self.canvas.load_shapes(s)
+        self.add_labels(s)
 
     def update_combo_box(self):
         items_text_list = [str(self.label_list.item(i).text()) for i in range(self.label_list.count())]
@@ -1190,31 +1211,52 @@ class MainWindow(QMainWindow, WindowMixin):
         self.shape_selection_changed(True)
         self.set_dirty()
 
-    def duplicate_all_shapes(self, _value=False):
-        if not self.canvas.shapes:
+    def replace_all_with_clipboard(self, _value=False):
+        """Delete every label in the current image and paste the copied ones
+        at their original position."""
+        if not self.shape_clipboard:
             return
-        shapes = [shape.copy() for shape in self.canvas.shapes]
-        delta = self.canvas.clamp_shapes_delta(shapes, QPointF(2.0, 2.0))
-        for shape in shapes:
-            shape.move_by(delta)
-            self.canvas.shapes.append(shape)
-        self.canvas.select_shapes(shapes)
+        # Drop all current shapes.
+        self.canvas.de_select_shape()
+        self.canvas.shapes = []
+        self.canvas.visible.clear()
+        self.items_to_shapes.clear()
+        self.shapes_to_items.clear()
+        self.label_list.clear()
+        # Paste the clipboard.
+        shapes = [shape.copy() for shape in self.shape_clipboard]
+        self.canvas.shapes.extend(shapes)
         self.add_labels(shapes)
+        self.canvas.select_shapes(shapes)
         self.shape_selection_changed(True)
         self.set_dirty()
+
+    def select_all_shapes(self, _value=False):
+        shapes = [s for s in self.canvas.shapes if self.canvas.isVisible(s)]
+        if not shapes:
+            return
+        self.canvas.select_shapes(shapes)
+        self.shape_selection_changed(True)
 
     def combo_selection_changed(self, selected_labels):
         selected_labels = set(selected_labels)
         visible_count = 0
-        for i in range(self.label_list.count()):
-            item = self.label_list.item(i)
-            shape = self.items_to_shapes[item]
-            matches_filter = not selected_labels or shape.label in selected_labels
-            item.setHidden(not matches_filter)
-            self.canvas.set_shape_visible(
-                shape, matches_filter and item.checkState() == Qt.Checked)
-            if matches_filter and item.checkState() == Qt.Checked:
-                visible_count += 1
+        self.label_list.setUpdatesEnabled(False)
+        try:
+            for i in range(self.label_list.count()):
+                item = self.label_list.item(i)
+                shape = self.items_to_shapes[item]
+                matches_filter = not selected_labels or shape.label in selected_labels
+                hidden = not matches_filter
+                if item.isHidden() != hidden:
+                    item.setHidden(hidden)
+                visible = matches_filter and item.checkState() == Qt.Checked
+                self.canvas.visible[shape] = visible
+                if visible:
+                    visible_count += 1
+        finally:
+            self.label_list.setUpdatesEnabled(True)
+        self.canvas.repaint()
         self.count_labels_label.setText('Count Labels: %d' % visible_count)
 
     def default_label_combo_selection_changed(self, index):

@@ -288,6 +288,21 @@ class Canvas(QWidget):
                         selected_bounds.contains(pos)):
                     self.drag_selected_shapes = True
                     self.prev_point = pos
+                elif (ev.modifiers() & Qt.ControlModifier and
+                        not self.selected_vertex() and
+                        self.shape_at_point(pos) is not None):
+                    # Ctrl+click: keep the current selection and add/remove
+                    # the clicked shape.
+                    hit = self.shape_at_point(pos)
+                    shapes = list(self.selected_shapes)
+                    if hit in shapes:
+                        shapes.remove(hit)
+                    else:
+                        shapes.append(hit)
+                    self.select_shapes(shapes)
+                    self.prev_point = pos
+                    if len(self.selected_shapes) > 1:
+                        self.drag_selected_shapes = True
                 else:
                     selection = self.select_shape_point(pos)
                     self.prev_point = pos
@@ -317,7 +332,10 @@ class Canvas(QWidget):
                     self.selection_rect = QRectF(pos, pos)
             else:
                 if hit_shape not in self.selected_shapes:
-                    self.select_shapes([hit_shape])
+                    if ev.modifiers() & Qt.ControlModifier:
+                        self.select_shapes(self.selected_shapes + [hit_shape])
+                    else:
+                        self.select_shapes([hit_shape])
                 self.right_drag_mode = 'move'
         self.update()
 
@@ -327,6 +345,9 @@ class Canvas(QWidget):
                 selected = [shape for shape in self.shapes
                             if self.isVisible(shape) and
                             self.selection_rect.intersects(shape.bounding_rect())]
+                if ev.modifiers() & Qt.ControlModifier:
+                    selected = self.selected_shapes + [
+                        s for s in selected if s not in self.selected_shapes]
                 self.select_shapes(selected)
             elif self.right_drag_mode == 'move' and self.shape_drag_changed:
                 self.shapeMoved.emit()
